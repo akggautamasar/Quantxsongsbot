@@ -354,28 +354,12 @@ async function handleYtCallback(callbackQuery) {
   await bot.sendMessage(chatId, `⏳ Downloading *${video.title}*...\nThis may take a moment.`, { parse_mode: 'Markdown' });
 
   try {
-    // Get audio URL from our API
-    const res = await axios.get(`${YT_API_URL}/api/audio`, {
-      params: { id: video.id },
-      timeout: 30000
-    });
+    // Render API downloads and streams the file — no Vercel timeout issue
+    const downloadUrl = `${YT_API_URL}/api/download?id=${video.id}`;
 
-    const data = res.data;
-    if (!data.audio_url) {
-      return bot.sendMessage(chatId, '❌ Could not get audio URL for this video.');
-    }
-
-    // Check filesize before downloading
-    if (data.filesize && data.filesize > 45 * 1024 * 1024) {
-      const sizeMB = (data.filesize / 1024 / 1024).toFixed(1);
-      return bot.sendMessage(chatId, `❌ File too large (${sizeMB}MB). Telegram limit is 50MB.\n\nTry a shorter video.`);
-    }
-
-    // Download audio buffer
-    const audioResp = await axios.get(data.audio_url, {
+    const audioResp = await axios.get(downloadUrl, {
       responseType: 'arraybuffer',
-      timeout: 60000,
-      headers: { 'User-Agent': 'Mozilla/5.0' }
+      timeout: 120000  // 2 min — Render handles the heavy work
     });
 
     const buffer = Buffer.from(audioResp.data);
@@ -385,20 +369,16 @@ async function handleYtCallback(callbackQuery) {
       return bot.sendMessage(chatId, `❌ File too large (${sizeMB}MB). Telegram limit is 50MB.`);
     }
 
-    const safeName = video.title.replace(/[^a-zA-Z0-9 _\-]/g, '').trim() || 'audio';
-    const ext = data.ext || 'm4a';
-    const fileName = `${safeName}.${ext}`;
+    // Get metadata from response headers
+    const headers = audioResp.headers;
+    const fileName = headers['x-filename'] || `${video.title.replace(/[^a-zA-Z0-9 _\-]/g, '').trim()}.m4a`;
+    const title = headers['x-title'] || video.title;
+    const channel = headers['x-channel'] || video.channel;
+    const duration = parseInt(headers['x-duration'] || video.duration || 0);
 
     await bot.sendAudio(chatId, buffer,
-      {
-        title: video.title,
-        performer: video.channel,
-        duration: video.duration || 0
-      },
-      {
-        filename: fileName,
-        contentType: 'audio/mp4'
-      }
+      { title, performer: channel, duration },
+      { filename: fileName, contentType: 'audio/mp4' }
     );
 
   } catch (err) {
