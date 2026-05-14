@@ -1,9 +1,11 @@
 {
   "name": "airsongs-bot",
   "version": "1.0.0",
-  "description": "AirSongs Telegram Bot",
+  "description": "AirSongs Telegram Bot with YouTube support",
   "dependencies": {
     "node-telegram-bot-api": "^0.64.0",
-    "axios": "^1.6.0"
+    "axios": "^1.6.0",
+    "youtube-sr": "^4.3.11",
+    "@distube/ytdl-core": "^4.14.4"
   }
 }
