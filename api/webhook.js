@@ -8,6 +8,22 @@ if (!token) throw new Error('TELEGRAM_BOT_TOKEN is not set!');
 
 const bot = new TelegramBot(token);
 
+// In-memory song cache: songKey -> song object
+// Key is a short index we generate to avoid long callback_data
+const songCache = {};
+let cacheCounter = 0;
+
+function cacheSong(song) {
+  cacheCounter++;
+  const key = String(cacheCounter);
+  songCache[key] = song;
+  // Keep cache small — remove old entries after 500
+  if (cacheCounter > 500) {
+    delete songCache[String(cacheCounter - 500)];
+  }
+  return key;
+}
+
 module.exports = async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -87,6 +103,9 @@ async function handleMessage(msg) {
     await bot.sendMessage(chatId, `🔍 Found ${songs.length} results for "${messageText}":`);
 
     for (const song of songs) {
+      // Cache the full song object and get a short key
+      const cacheKey = cacheSong(song);
+
       const duration = `${Math.floor(song.duration / 60)}:${String(song.duration % 60).padStart(2, '0')}`;
       const songInfo =
         `🎵 *${song.song}*\n` +
@@ -99,12 +118,12 @@ async function handleMessage(msg) {
       const keyboard = {
         inline_keyboard: [
           [
-            { text: '🎧 Stream', callback_data: `stream_${song.id}` },
-            { text: '📥 Download', callback_data: `download_${song.id}` }
+            { text: '🎧 Stream', callback_data: `stream_${cacheKey}` },
+            { text: '📥 Download', callback_data: `download_${cacheKey}` }
           ],
           [
-            { text: '📝 Lyrics', callback_data: `lyrics_${song.id}` },
-            { text: 'ℹ️ Info', callback_data: `info_${song.id}` }
+            { text: '📝 Lyrics', callback_data: `lyrics_${cacheKey}` },
+            { text: 'ℹ️ Info', callback_data: `info_${cacheKey}` }
           ]
         ]
       };
@@ -135,15 +154,14 @@ async function handleCallbackQuery(callbackQuery) {
   try {
     const underscoreIndex = data.indexOf('_');
     const action = data.substring(0, underscoreIndex);
-    const songId = data.substring(underscoreIndex + 1);
+    const cacheKey = data.substring(underscoreIndex + 1);
 
-    const songResponse = await axios.get(`${API_BASE_URL}/song/?query=${songId}`);
+    // Get song from cache — no extra API call needed
+    const song = songCache[cacheKey];
 
-    let song;
-    if (Array.isArray(songResponse.data) && songResponse.data.length > 0) {
-      song = songResponse.data[0];
-    } else {
-      return bot.answerCallbackQuery(callbackQuery.id, { text: '❌ Song not found!' });
+    if (!song) {
+      await bot.answerCallbackQuery(callbackQuery.id, { text: '❌ Session expired. Search the song again.' });
+      return;
     }
 
     switch (action) {
@@ -157,23 +175,43 @@ async function handleCallbackQuery(callbackQuery) {
           });
           await bot.answerCallbackQuery(callbackQuery.id, { text: '🎧 Streaming...' });
         } else {
-          await bot.answerCallbackQuery(callbackQuery.id, { text: '❌ Stream not available!' });
+          // Try fetching media_url via song ID as fallback
+          try {
+            const songResponse = await axios.get(`${API_BASE_URL}/song/?query=${song.id}`);
+            if (Array.isArray(songResponse.data) && songResponse.data[0]?.media_url) {
+              const freshSong = songResponse.data[0];
+              songCache[cacheKey] = { ...song, ...freshSong };
+              await bot.sendAudio(chatId, freshSong.media_url, {
+                title: freshSong.song,
+                performer: freshSong.primary_artists,
+                duration: parseInt(freshSong.duration)
+              });
+              await bot.answerCallbackQuery(callbackQuery.id, { text: '🎧 Streaming...' });
+            } else {
+              await bot.answerCallbackQuery(callbackQuery.id, { text: '❌ Stream not available for this song!' });
+            }
+          } catch {
+            await bot.answerCallbackQuery(callbackQuery.id, { text: '❌ Stream not available!' });
+          }
         }
         break;
 
       case 'download':
         if (song.media_url) {
-          await bot.sendMessage(chatId, `📥 *Download Link:*\n${song.media_url}\n\nClick the link to download the MP3 file.`, { parse_mode: 'Markdown' });
+          await bot.sendMessage(chatId,
+            `📥 *Download Link:*\n${song.media_url}\n\nClick the link to download the MP3 file.`,
+            { parse_mode: 'Markdown' }
+          );
           await bot.answerCallbackQuery(callbackQuery.id, { text: '📥 Download link sent!' });
         } else {
-          await bot.answerCallbackQuery(callbackQuery.id, { text: '❌ Download not available!' });
+          await bot.answerCallbackQuery(callbackQuery.id, { text: '❌ Download not available for this song!' });
         }
         break;
 
       case 'lyrics':
         await bot.sendChatAction(chatId, 'typing');
         try {
-          const lyricsResponse = await axios.get(`${API_BASE_URL}/lyrics/?query=${songId}`);
+          const lyricsResponse = await axios.get(`${API_BASE_URL}/lyrics/?query=${song.id}`);
           if (lyricsResponse.data.success && lyricsResponse.data.data && lyricsResponse.data.data.lyrics) {
             const lyrics = lyricsResponse.data.data.lyrics;
             const truncated = lyrics.length > 3800 ? lyrics.substring(0, 3800) + '\n...' : lyrics;
