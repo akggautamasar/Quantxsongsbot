@@ -1,5 +1,7 @@
 const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
+const youtubeSr = require('youtube-sr').default;
+const ytdl = require('@distube/ytdl-core');
 
 const API_BASE_URL = 'https://airsongsapi.vercel.app';
 
@@ -13,6 +15,9 @@ const bot = new TelegramBot(token);
 const songCache = {};
 let cacheCounter = 0;
 
+// Separate cache for YouTube results
+const ytCache = {};
+
 function cacheSong(song) {
   cacheCounter++;
   const key = String(cacheCounter);
@@ -21,6 +26,13 @@ function cacheSong(song) {
   if (cacheCounter > 500) {
     delete songCache[String(cacheCounter - 500)];
   }
+  return key;
+}
+
+function cacheYt(video) {
+  cacheCounter++;
+  const key = 'yt' + String(cacheCounter);
+  ytCache[key] = video;
   return key;
 }
 
@@ -60,12 +72,13 @@ async function handleMessage(msg) {
       '• 🎧 Stream music directly\n' +
       '• 📥 Download MP3 files\n' +
       '• 📝 Get lyrics\n' +
-      '• ℹ️ View song details\n\n' +
+      '• ℹ️ View song details\n' +
+      '• 🎬 YouTube search with /yt\n\n' +
       'Just type the name of any song to get started\n\n' +
       '*Examples:*\n' +
       '• Arjan Vailly\n' +
       '• Shape of You\n' +
-      '• Blinding Lights\n\n' +
+      '• /yt Blinding Lights\n\n' +
       'Built with ❤️ by AirSongs',
       { parse_mode: 'Markdown' }
     );
@@ -75,17 +88,27 @@ async function handleMessage(msg) {
     return bot.sendMessage(chatId,
       '🤖 *AirSongs Bot Commands:*\n\n' +
       '/start - Start the bot\n' +
-      '/help - Show this help message\n\n' +
+      '/help - Show this help message\n' +
+      '/yt SongName - Search YouTube\n\n' +
       '🔍 *How to use:*\n' +
-      '1. Send me any song name\n' +
-      '2. Choose from the search results\n' +
-      '3. Stream, download, or get lyrics\n\n' +
+      '1. Send me any song name (uses AirSongs API)\n' +
+      '2. Or use /yt to search YouTube\n' +
+      '3. Choose from results and stream or download\n\n' +
       '💡 *Tips:*\n' +
       '• Be specific with song names for better results\n' +
       '• Include artist name for more accurate search\n\n' +
       '🎵 Enjoy your music',
       { parse_mode: 'Markdown' }
     );
+  }
+
+  // YouTube search command
+  if (messageText.startsWith('/yt')) {
+    const query = messageText.replace(/^\/yt\s*/i, '').trim();
+    if (!query) {
+      return bot.sendMessage(chatId, '❌ Please provide a song name.\n\nExample: /yt Shape of You');
+    }
+    return handleYoutubeSearch(chatId, query);
   }
 
   if (messageText.startsWith('/')) return;
@@ -151,6 +174,11 @@ async function handleCallbackQuery(callbackQuery) {
   const chatId = callbackQuery.message.chat.id;
   const data = callbackQuery.data;
 
+  // Route YouTube callbacks separately
+  if (data.startsWith('ytdl_')) {
+    return handleYtCallback(callbackQuery);
+  }
+
   try {
     const underscoreIndex = data.indexOf('_');
     const action = data.substring(0, underscoreIndex);
@@ -169,23 +197,29 @@ async function handleCallbackQuery(callbackQuery) {
         await bot.sendChatAction(chatId, 'upload_audio');
         if (song.media_url) {
           try {
-            // Download file and re-upload with proper song name
-            const audioResp = await axios.get(song.media_url, { responseType: 'arraybuffer', timeout: 30000 });
-            const buffer = Buffer.from(audioResp.data);
-            const safeName = song.song.replace(/[^a-zA-Z0-9 _-]/g, '').trim() || 'song';
-            const fileName = `${safeName} - ${song.primary_artists}.m4a`;
-            await bot.sendAudio(chatId, buffer, {
-              title: song.song,
-              performer: song.primary_artists,
-              duration: parseInt(song.duration)
-            }, {
-              filename: fileName,
-              contentType: 'audio/mp4'
+            // Download file as buffer so we can set a proper filename
+            const audioResp = await axios.get(song.media_url, {
+              responseType: 'arraybuffer',
+              timeout: 25000
             });
+            const buffer = Buffer.from(audioResp.data);
+            const safeName = song.song.replace(/[^a-zA-Z0-9 _\-]/g, '').trim() || 'song';
+            const fileName = `${safeName} - ${song.primary_artists}.m4a`;
+            await bot.sendAudio(chatId, buffer,
+              {
+                title: song.song,
+                performer: song.primary_artists,
+                duration: parseInt(song.duration)
+              },
+              {
+                filename: fileName,
+                contentType: 'audio/mp4'
+              }
+            );
             await bot.answerCallbackQuery(callbackQuery.id, { text: '🎧 Streaming...' });
           } catch (err) {
-            console.error('Audio send error:', err.message);
-            // Fallback: send as URL if download fails
+            console.error('Audio download error:', err.message);
+            // Fallback: send URL directly (filename will be hash, but at least it works)
             await bot.sendAudio(chatId, song.media_url, {
               title: song.song,
               performer: song.primary_artists,
@@ -194,23 +228,7 @@ async function handleCallbackQuery(callbackQuery) {
             await bot.answerCallbackQuery(callbackQuery.id, { text: '🎧 Streaming...' });
           }
         } else {
-          try {
-            const songResponse = await axios.get(`${API_BASE_URL}/song/?query=${song.id}`);
-            if (Array.isArray(songResponse.data) && songResponse.data[0]?.media_url) {
-              const freshSong = songResponse.data[0];
-              songCache[cacheKey] = { ...song, ...freshSong };
-              await bot.sendAudio(chatId, freshSong.media_url, {
-                title: freshSong.song,
-                performer: freshSong.primary_artists,
-                duration: parseInt(freshSong.duration)
-              });
-              await bot.answerCallbackQuery(callbackQuery.id, { text: '🎧 Streaming...' });
-            } else {
-              await bot.answerCallbackQuery(callbackQuery.id, { text: '❌ Stream not available for this song!' });
-            }
-          } catch {
-            await bot.answerCallbackQuery(callbackQuery.id, { text: '❌ Stream not available!' });
-          }
+          await bot.answerCallbackQuery(callbackQuery.id, { text: '❌ Stream not available for this song!' });
         }
         break;
 
@@ -269,5 +287,125 @@ async function handleCallbackQuery(callbackQuery) {
   } catch (error) {
     console.error('Callback error:', error.message);
     await bot.answerCallbackQuery(callbackQuery.id, { text: '❌ Error processing request!' });
+  }
+}
+
+// ── YouTube Search ──────────────────────────────────────────────
+async function handleYoutubeSearch(chatId, query) {
+  try {
+    await bot.sendChatAction(chatId, 'typing');
+    await bot.sendMessage(chatId, `🎬 Searching YouTube for "${query}"...`);
+
+    const results = await youtubeSr.search(query, { limit: 5, type: 'video' });
+
+    if (!results || results.length === 0) {
+      return bot.sendMessage(chatId, '❌ No YouTube results found. Try a different search term.');
+    }
+
+    for (const video of results) {
+      const cacheKey = cacheYt({
+        id: video.id,
+        title: video.title,
+        channel: video.channel?.name || 'Unknown',
+        duration: video.duration,
+        thumbnail: video.thumbnail?.url || ''
+      });
+
+      const dur = video.durationFormatted || '?';
+      const info =
+        `🎬 *${video.title}*\n` +
+        `👤 Channel: ${video.channel?.name || 'Unknown'}\n` +
+        `⏱️ Duration: ${dur}\n` +
+        `🔗 youtube.com/watch?v=${video.id}`;
+
+      const keyboard = {
+        inline_keyboard: [[
+          { text: '🎧 Download Audio', callback_data: `ytdl_${cacheKey}` }
+        ]]
+      };
+
+      if (video.thumbnail?.url) {
+        await bot.sendPhoto(chatId, video.thumbnail.url, {
+          caption: info,
+          parse_mode: 'Markdown',
+          reply_markup: keyboard
+        });
+      } else {
+        await bot.sendMessage(chatId, info, {
+          parse_mode: 'Markdown',
+          reply_markup: keyboard
+        });
+      }
+    }
+  } catch (err) {
+    console.error('YouTube search error:', err.message);
+    await bot.sendMessage(chatId, '❌ YouTube search failed. Please try again.');
+  }
+}
+
+// ── YouTube Download Callback ───────────────────────────────────
+async function handleYtCallback(callbackQuery) {
+  const chatId = callbackQuery.message.chat.id;
+  const cacheKey = callbackQuery.data.replace('ytdl_', '');
+  const video = ytCache[cacheKey];
+
+  if (!video) {
+    return bot.answerCallbackQuery(callbackQuery.id, { text: '❌ Session expired. Search again.' });
+  }
+
+  await bot.answerCallbackQuery(callbackQuery.id, { text: '⏳ Preparing audio...' });
+  await bot.sendChatAction(chatId, 'upload_audio');
+  await bot.sendMessage(chatId, `⏳ Downloading *${video.title}*...\nThis may take a moment.`, { parse_mode: 'Markdown' });
+
+  try {
+    const videoUrl = `https://www.youtube.com/watch?v=${video.id}`;
+
+    const info = await ytdl.getInfo(videoUrl);
+    const format = ytdl.chooseFormat(info.formats, {
+      quality: 'highestaudio',
+      filter: 'audioonly'
+    });
+
+    if (!format || !format.url) {
+      return bot.sendMessage(chatId, '❌ Could not get audio URL for this video.');
+    }
+
+    const audioResp = await axios.get(format.url, {
+      responseType: 'arraybuffer',
+      timeout: 30000,
+      headers: { 'User-Agent': 'Mozilla/5.0' }
+    });
+
+    const buffer = Buffer.from(audioResp.data);
+    const sizeMB = (buffer.length / 1024 / 1024).toFixed(1);
+
+    if (buffer.length > 45 * 1024 * 1024) {
+      return bot.sendMessage(chatId, `❌ File too large (${sizeMB}MB). Telegram limit is 50MB.\n\nTry a shorter video.`);
+    }
+
+    const safeName = video.title.replace(/[^a-zA-Z0-9 _\-]/g, '').trim() || 'audio';
+    const fileName = `${safeName}.m4a`;
+
+    await bot.sendAudio(chatId, buffer,
+      {
+        title: video.title,
+        performer: video.channel,
+        duration: Math.floor((video.duration || 0) / 1000)
+      },
+      {
+        filename: fileName,
+        contentType: format.mimeType?.split(';')[0] || 'audio/mp4'
+      }
+    );
+
+  } catch (err) {
+    console.error('YT download error:', err.message);
+    await bot.sendMessage(chatId,
+      '❌ Download failed. This can happen with:\n' +
+      '• Age-restricted videos\n' +
+      '• Very long videos (over 15 min)\n' +
+      '• Region-blocked content\n\n' +
+      'Try a different video.'
+    );
   }
 }
