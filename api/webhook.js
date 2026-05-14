@@ -3,13 +3,11 @@ const axios = require('axios');
 
 const API_BASE_URL = 'https://airsongsapi.vercel.app';
 
-// NEVER hardcode tokens — use environment variable only
 const token = process.env.TELEGRAM_BOT_TOKEN;
-if (!token) throw new Error('TELEGRAM_BOT_TOKEN environment variable is not set!');
+if (!token) throw new Error('TELEGRAM_BOT_TOKEN is not set!');
 
 const bot = new TelegramBot(token);
 
-// Handle incoming webhook requests
 module.exports = async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -40,45 +38,38 @@ async function handleMessage(msg) {
   if (!messageText) return;
 
   if (messageText === '/start') {
-    return bot.sendMessage(chatId, `
-🎵 *Welcome to AirSongs Bot!* 🎵
-
-Search for any song and I'll help you:
-• 🎧 Stream music directly
-• 📥 Download MP3 files
-• 📝 Get lyrics
-• ℹ️ View song details
-
-Just type the name of any song to get started\\!
-
-*Examples:*
-• Arjan Vailly
-• Shape of You
-• Blinding Lights
-
-Built with ❤️ by AirSongs
-    `, { parse_mode: 'MarkdownV2' });
+    return bot.sendMessage(chatId,
+      '🎵 *Welcome to AirSongs Bot!* 🎵\n\n' +
+      'Search for any song and I will help you:\n' +
+      '• 🎧 Stream music directly\n' +
+      '• 📥 Download MP3 files\n' +
+      '• 📝 Get lyrics\n' +
+      '• ℹ️ View song details\n\n' +
+      'Just type the name of any song to get started\n\n' +
+      '*Examples:*\n' +
+      '• Arjan Vailly\n' +
+      '• Shape of You\n' +
+      '• Blinding Lights\n\n' +
+      'Built with ❤️ by AirSongs',
+      { parse_mode: 'Markdown' }
+    );
   }
 
   if (messageText === '/help') {
-    return bot.sendMessage(chatId, `
-🤖 *AirSongs Bot Commands:*
-
-/start \\- Start the bot
-/help \\- Show this help message
-
-🔍 *How to use:*
-1\\. Send me any song name
-2\\. Choose from the search results
-3\\. Stream, download, or get lyrics\\!
-
-💡 *Tips:*
-• Be specific with song names for better results
-• Include artist name for more accurate search
-• All downloads are in high quality MP3 format
-
-🎵 Enjoy your music\\!
-    `, { parse_mode: 'MarkdownV2' });
+    return bot.sendMessage(chatId,
+      '🤖 *AirSongs Bot Commands:*\n\n' +
+      '/start - Start the bot\n' +
+      '/help - Show this help message\n\n' +
+      '🔍 *How to use:*\n' +
+      '1. Send me any song name\n' +
+      '2. Choose from the search results\n' +
+      '3. Stream, download, or get lyrics\n\n' +
+      '💡 *Tips:*\n' +
+      '• Be specific with song names for better results\n' +
+      '• Include artist name for more accurate search\n\n' +
+      '🎵 Enjoy your music',
+      { parse_mode: 'Markdown' }
+    );
   }
 
   if (messageText.startsWith('/')) return;
@@ -86,8 +77,7 @@ Built with ❤️ by AirSongs
   try {
     await bot.sendChatAction(chatId, 'typing');
 
-    const searchUrl = `${API_BASE_URL}/result/?query=${encodeURIComponent(messageText)}`;
-    const response = await axios.get(searchUrl);
+    const response = await axios.get(`${API_BASE_URL}/result/?query=${encodeURIComponent(messageText)}`);
 
     if (!Array.isArray(response.data) || response.data.length === 0) {
       return bot.sendMessage(chatId, '❌ No songs found. Try a different search term.');
@@ -98,7 +88,13 @@ Built with ❤️ by AirSongs
 
     for (const song of songs) {
       const duration = `${Math.floor(song.duration / 60)}:${String(song.duration % 60).padStart(2, '0')}`;
-      const songInfo = `🎵 *${escapeMarkdown(song.song)}*\n👤 Artist: ${escapeMarkdown(song.primary_artists)}\n💽 Album: ${escapeMarkdown(song.album)}\n⏱️ Duration: ${duration}\n🗓️ Year: ${song.year}\n🌐 Language: ${escapeMarkdown(song.language)}`;
+      const songInfo =
+        `🎵 *${song.song}*\n` +
+        `👤 Artist: ${song.primary_artists}\n` +
+        `💽 Album: ${song.album}\n` +
+        `⏱️ Duration: ${duration}\n` +
+        `🗓️ Year: ${song.year}\n` +
+        `🌐 Language: ${song.language}`;
 
       const keyboard = {
         inline_keyboard: [
@@ -127,8 +123,8 @@ Built with ❤️ by AirSongs
       }
     }
   } catch (error) {
-    console.error('Search error:', error);
-    await bot.sendMessage(chatId, '❌ Sorry, there was an error searching for songs. Please try again.');
+    console.error('Search error:', error.message);
+    await bot.sendMessage(chatId, '❌ Sorry, there was an error. Please try again.');
   }
 }
 
@@ -141,8 +137,7 @@ async function handleCallbackQuery(callbackQuery) {
     const action = data.substring(0, underscoreIndex);
     const songId = data.substring(underscoreIndex + 1);
 
-    const songUrl = `${API_BASE_URL}/song/?query=${songId}`;
-    const songResponse = await axios.get(songUrl);
+    const songResponse = await axios.get(`${API_BASE_URL}/song/?query=${songId}`);
 
     let song;
     if (Array.isArray(songResponse.data) && songResponse.data.length > 0) {
@@ -168,7 +163,7 @@ async function handleCallbackQuery(callbackQuery) {
 
       case 'download':
         if (song.media_url) {
-          await bot.sendMessage(chatId, `📥 *Download Link:*\n${song.media_url}\n\n💡 Click the link to download the MP3 file.`, { parse_mode: 'Markdown' });
+          await bot.sendMessage(chatId, `📥 *Download Link:*\n${song.media_url}\n\nClick the link to download the MP3 file.`, { parse_mode: 'Markdown' });
           await bot.answerCallbackQuery(callbackQuery.id, { text: '📥 Download link sent!' });
         } else {
           await bot.answerCallbackQuery(callbackQuery.id, { text: '❌ Download not available!' });
@@ -178,20 +173,17 @@ async function handleCallbackQuery(callbackQuery) {
       case 'lyrics':
         await bot.sendChatAction(chatId, 'typing');
         try {
-          const lyricsUrl = `${API_BASE_URL}/lyrics/?query=${songId}`;
-          const lyricsResponse = await axios.get(lyricsUrl);
-
+          const lyricsResponse = await axios.get(`${API_BASE_URL}/lyrics/?query=${songId}`);
           if (lyricsResponse.data.success && lyricsResponse.data.data && lyricsResponse.data.data.lyrics) {
             const lyrics = lyricsResponse.data.data.lyrics;
-            // Telegram message limit is 4096 chars — truncate if needed
             const truncated = lyrics.length > 3800 ? lyrics.substring(0, 3800) + '\n...' : lyrics;
-            await bot.sendMessage(chatId, `📝 *Lyrics for ${escapeMarkdown(song.song)}*\n\n${truncated}`, { parse_mode: 'Markdown' });
+            await bot.sendMessage(chatId, `📝 *Lyrics for ${song.song}*\n\n${truncated}`, { parse_mode: 'Markdown' });
             await bot.answerCallbackQuery(callbackQuery.id, { text: '📝 Lyrics loaded!' });
           } else {
             await bot.sendMessage(chatId, '❌ Lyrics not available for this song.');
             await bot.answerCallbackQuery(callbackQuery.id, { text: '❌ No lyrics found!' });
           }
-        } catch (error) {
+        } catch {
           await bot.sendMessage(chatId, '❌ Error fetching lyrics.');
           await bot.answerCallbackQuery(callbackQuery.id, { text: '❌ Error fetching lyrics!' });
         }
@@ -199,10 +191,19 @@ async function handleCallbackQuery(callbackQuery) {
 
       case 'info': {
         const duration = `${Math.floor(song.duration / 60)}:${String(song.duration % 60).padStart(2, '0')}`;
-        const infoMessage = `ℹ️ *Song Information*\n\n🎵 *Title:* ${escapeMarkdown(song.song)}\n👤 *Artist:* ${escapeMarkdown(song.primary_artists)}\n💽 *Album:* ${escapeMarkdown(song.album)}\n⏱️ *Duration:* ${duration}\n🗓️ *Year:* ${song.year}\n🌐 *Language:* ${escapeMarkdown(song.language)}\n▶️ *Play Count:* ${song.play_count ? parseInt(song.play_count).toLocaleString() : 'N/A'}\n🏷️ *Label:* ${escapeMarkdown(song.label || 'N/A')}`;
+        const infoMessage =
+          `ℹ️ *Song Information*\n\n` +
+          `🎵 *Title:* ${song.song}\n` +
+          `👤 *Artist:* ${song.primary_artists}\n` +
+          `💽 *Album:* ${song.album}\n` +
+          `⏱️ *Duration:* ${duration}\n` +
+          `🗓️ *Year:* ${song.year}\n` +
+          `🌐 *Language:* ${song.language}\n` +
+          `▶️ *Play Count:* ${song.play_count ? parseInt(song.play_count).toLocaleString() : 'N/A'}\n` +
+          `🏷️ *Label:* ${song.label || 'N/A'}`;
 
         await bot.sendMessage(chatId, infoMessage, { parse_mode: 'Markdown' });
-        await bot.answerCallbackQuery(callbackQuery.id, { text: 'ℹ️ Song info displayed!' });
+        await bot.answerCallbackQuery(callbackQuery.id, { text: 'ℹ️ Info displayed!' });
         break;
       }
 
@@ -210,13 +211,7 @@ async function handleCallbackQuery(callbackQuery) {
         await bot.answerCallbackQuery(callbackQuery.id, { text: '❌ Unknown action!' });
     }
   } catch (error) {
-    console.error('Callback query error:', error);
+    console.error('Callback error:', error.message);
     await bot.answerCallbackQuery(callbackQuery.id, { text: '❌ Error processing request!' });
   }
-}
-
-// Escape special Markdown characters to prevent parse errors
-function escapeMarkdown(text) {
-  if (!text) return '';
-  return String(text).replace(/[_*[\]()~`>#+=|{}.!-]/g, '\\$&');
 }
