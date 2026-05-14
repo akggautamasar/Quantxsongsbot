@@ -1,9 +1,8 @@
 const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
-const youtubeSr = require('youtube-sr').default;
-const ytdl = require('@distube/ytdl-core');
 
 const API_BASE_URL = 'https://airsongsapi.vercel.app';
+const YT_API_URL = process.env.YT_API_URL || 'https://quantx-yt-api.onrender.com';
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 if (!token) throw new Error('TELEGRAM_BOT_TOKEN is not set!');
@@ -296,27 +295,24 @@ async function handleYoutubeSearch(chatId, query) {
     await bot.sendChatAction(chatId, 'typing');
     await bot.sendMessage(chatId, `🎬 Searching YouTube for "${query}"...`);
 
-    const results = await youtubeSr.search(query, { limit: 5, type: 'video' });
+    const res = await axios.get(`${YT_API_URL}/api/search`, {
+      params: { q: query },
+      timeout: 15000
+    });
 
-    if (!results || results.length === 0) {
+    const videos = res.data.results;
+
+    if (!videos || videos.length === 0) {
       return bot.sendMessage(chatId, '❌ No YouTube results found. Try a different search term.');
     }
 
-    for (const video of results) {
-      const cacheKey = cacheYt({
-        id: video.id,
-        title: video.title,
-        channel: video.channel?.name || 'Unknown',
-        duration: video.duration,
-        thumbnail: video.thumbnail?.url || ''
-      });
+    for (const video of videos) {
+      const cacheKey = cacheYt(video);
 
-      const dur = video.durationFormatted || '?';
       const info =
         `🎬 *${video.title}*\n` +
-        `👤 Channel: ${video.channel?.name || 'Unknown'}\n` +
-        `⏱️ Duration: ${dur}\n` +
-        `🔗 youtube.com/watch?v=${video.id}`;
+        `👤 Channel: ${video.channel}\n` +
+        `⏱️ Duration: ${video.duration_str}`;
 
       const keyboard = {
         inline_keyboard: [[
@@ -324,8 +320,8 @@ async function handleYoutubeSearch(chatId, query) {
         ]]
       };
 
-      if (video.thumbnail?.url) {
-        await bot.sendPhoto(chatId, video.thumbnail.url, {
+      if (video.thumbnail) {
+        await bot.sendPhoto(chatId, video.thumbnail, {
           caption: info,
           parse_mode: 'Markdown',
           reply_markup: keyboard
@@ -358,21 +354,27 @@ async function handleYtCallback(callbackQuery) {
   await bot.sendMessage(chatId, `⏳ Downloading *${video.title}*...\nThis may take a moment.`, { parse_mode: 'Markdown' });
 
   try {
-    const videoUrl = `https://www.youtube.com/watch?v=${video.id}`;
-
-    const info = await ytdl.getInfo(videoUrl);
-    const format = ytdl.chooseFormat(info.formats, {
-      quality: 'highestaudio',
-      filter: 'audioonly'
+    // Get audio URL from our API
+    const res = await axios.get(`${YT_API_URL}/api/audio`, {
+      params: { id: video.id },
+      timeout: 30000
     });
 
-    if (!format || !format.url) {
+    const data = res.data;
+    if (!data.audio_url) {
       return bot.sendMessage(chatId, '❌ Could not get audio URL for this video.');
     }
 
-    const audioResp = await axios.get(format.url, {
+    // Check filesize before downloading
+    if (data.filesize && data.filesize > 45 * 1024 * 1024) {
+      const sizeMB = (data.filesize / 1024 / 1024).toFixed(1);
+      return bot.sendMessage(chatId, `❌ File too large (${sizeMB}MB). Telegram limit is 50MB.\n\nTry a shorter video.`);
+    }
+
+    // Download audio buffer
+    const audioResp = await axios.get(data.audio_url, {
       responseType: 'arraybuffer',
-      timeout: 30000,
+      timeout: 60000,
       headers: { 'User-Agent': 'Mozilla/5.0' }
     });
 
@@ -380,21 +382,22 @@ async function handleYtCallback(callbackQuery) {
     const sizeMB = (buffer.length / 1024 / 1024).toFixed(1);
 
     if (buffer.length > 45 * 1024 * 1024) {
-      return bot.sendMessage(chatId, `❌ File too large (${sizeMB}MB). Telegram limit is 50MB.\n\nTry a shorter video.`);
+      return bot.sendMessage(chatId, `❌ File too large (${sizeMB}MB). Telegram limit is 50MB.`);
     }
 
     const safeName = video.title.replace(/[^a-zA-Z0-9 _\-]/g, '').trim() || 'audio';
-    const fileName = `${safeName}.m4a`;
+    const ext = data.ext || 'm4a';
+    const fileName = `${safeName}.${ext}`;
 
     await bot.sendAudio(chatId, buffer,
       {
         title: video.title,
         performer: video.channel,
-        duration: Math.floor((video.duration || 0) / 1000)
+        duration: video.duration || 0
       },
       {
         filename: fileName,
-        contentType: format.mimeType?.split(';')[0] || 'audio/mp4'
+        contentType: 'audio/mp4'
       }
     );
 
@@ -409,3 +412,4 @@ async function handleYtCallback(callbackQuery) {
     );
   }
 }
+
