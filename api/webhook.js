@@ -168,32 +168,14 @@ async function handleCallbackQuery(callbackQuery) {
       case 'stream':
         await bot.sendChatAction(chatId, 'upload_audio');
         if (song.media_url) {
-          try {
-            // Download file and re-upload with proper song name
-            const audioResp = await axios.get(song.media_url, { responseType: 'arraybuffer', timeout: 30000 });
-            const buffer = Buffer.from(audioResp.data);
-            const safeName = song.song.replace(/[^a-zA-Z0-9 _-]/g, '').trim() || 'song';
-            const fileName = `${safeName} - ${song.primary_artists}.m4a`;
-            await bot.sendAudio(chatId, buffer, {
-              title: song.song,
-              performer: song.primary_artists,
-              duration: parseInt(song.duration)
-            }, {
-              filename: fileName,
-              contentType: 'audio/mp4'
-            });
-            await bot.answerCallbackQuery(callbackQuery.id, { text: '🎧 Streaming...' });
-          } catch (err) {
-            console.error('Audio send error:', err.message);
-            // Fallback: send as URL if download fails
-            await bot.sendAudio(chatId, song.media_url, {
-              title: song.song,
-              performer: song.primary_artists,
-              duration: parseInt(song.duration)
-            });
-            await bot.answerCallbackQuery(callbackQuery.id, { text: '🎧 Streaming...' });
-          }
+          await bot.sendAudio(chatId, song.media_url, {
+            title: song.song,
+            performer: song.primary_artists,
+            duration: parseInt(song.duration)
+          });
+          await bot.answerCallbackQuery(callbackQuery.id, { text: '🎧 Streaming...' });
         } else {
+          // Try fetching media_url via song ID as fallback
           try {
             const songResponse = await axios.get(`${API_BASE_URL}/song/?query=${song.id}`);
             if (Array.isArray(songResponse.data) && songResponse.data[0]?.media_url) {
